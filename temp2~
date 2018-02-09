@@ -1,0 +1,195 @@
+import csv
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+from sklearn.cluster import KMeans
+
+
+
+#Reading data from csv files
+df_input=pd.read_csv("/home/ashwin/Downloads/Querylevelnorm_X.csv", sep=',',header=None)
+df_output=pd.read_csv("/home/ashwin/Downloads/Querylevelnorm_t.csv", sep=',',header=None)
+df_output.columns = ['y']
+df = pd.concat([df_input, df_output] , axis =1 )
+train, validate, test = np.split(df.sample(frac=1), [int(.8*len(df)), int(.9*len(df))])
+#Creating train sets
+train_input =  train[train.columns[0:46]]
+train_output = train['y']
+trainsize, _ = train_input.shape
+#Creating validation sets
+validate_input =  validate[validate.columns[0:46]]
+validate_output = validate['y']
+validatesize , _ = validate_input.shape
+#Creating test sets
+test_input =  test[test.columns[0:46]]
+test_output = test['y']
+testsize , _ = test_input.shape
+
+
+
+##Initializing input and output train data
+input_data_train = np.array(train_input)
+##output_data = np.array(train_output)
+output_data_train = train_output.reshape([-1,1])
+##Initializing input and output validation data
+input_data_validate = np.array(validate_input)
+##output_data = np.array(train_output)
+output_data_validate = validate_output.reshape([-1,1])
+##Initializing input and output test data
+input_data_test = np.array(test_input)
+##output_data = np.array(train_output)
+output_data_test = test_output.reshape([-1,1])
+
+
+
+##setting input and output data as training input
+input_data = input_data_train
+output_data = output_data_train
+
+##Function to compute the design matrix
+def compute_design_matrix(X, centers, spreads):
+ # use broadcast 
+ basis_func_outputs = np.exp(np.sum(np.matmul(X - centers, spreads) * (X - centers),axis=2) / (-2)).T
+ # insert ones to the 1st col
+ return np.insert(basis_func_outputs, 0, 1, axis=1)
+
+
+K=3
+
+##Function to return the 'K' centres from the K means clustering
+##Returns an [M,1,D] array 
+def calculate_centers(K):
+   kmeans = KMeans(n_clusters=K)
+   KOut = kmeans.fit(train_input)
+   KOut.cluster_centers_
+   return np.array(KOut.cluster_centers_)  
+
+##Function to return the Diagonal matrix with diagonals as the variance * k  
+##Returns an [M,D,D] array
+def calculate_spreads(K):
+    diagonal = np.zeros(shape = (46,46))
+    k1=5 
+    for i in range(0,46) : 
+        val = np.var(input_data[:,i])
+        diagonal[i,i]= val * k1                
+    lst2 = []
+    for i in range(K):
+      lst2.append(diagonal)
+          
+    #return np.array([np.array(diagonal),np.array(diagonal),np.array(diagonal)])
+    return lst2
+
+##Function to calculate validation error
+def calculate_errors_validate(w , design_matrix_validate , validate_output ) :
+    error = (1/2)*np.power(np.sum(np.power((np.matmul(design_matrix_validate  , w) - validate_output) , 2)), 0.5)    
+    error = np.power(error *(2/validatesize) , 0.5)
+    return error
+
+##Function to calculate test error 
+def calculate_errors_test(w , design_matrix_test  , test_output) :
+    error = (1/2)*np.power(np.sum(np.power((np.matmul(design_matrix_test , w) - test_output)  ,2)) , 0.5)
+    error = np.power(error *(2/testsize) , 0.5)
+    return error
+
+def closed_form_sol(L2_lambda, design_matrix, output_data):
+    return np.linalg.solve(L2_lambda * np.identity(design_matrix.shape[1]) + np.matmul(design_matrix.T, design_matrix), np.matmul(design_matrix.T, output_data)).flatten()
+
+  
+def SGD_sol(learning_rate, minibatch_size, num_epochs, L2_lambda,design_matrix,output_data):
+    N, _ = design_matrix.shape
+    # You can try different mini-batch size size
+    # Using minibatch_size = 1 is equivalent to standard gradient descent
+    # Using minibatch_size = N is equivalent to stochastic gradient descent
+    # In this case, minibatch_size = N is better
+    weights = np.random.randn(1, (K+1)) * 0.1
+    # The more epochs the higher training accuracy. When set to 1000000,
+    # weights will be very close to closed_form_weights. But this is unnecessary
+    lst = []
+    for epoch in range(num_epochs):
+      
+      for i in range(int(N / minibatch_size)):
+         lower_bound = i * minibatch_size
+         upper_bound = min((i+1)*minibatch_size, N)
+         Phi = design_matrix[lower_bound : upper_bound, :]
+         t = output_data[lower_bound : upper_bound , :]
+         E_D = np.matmul((np.matmul(Phi, weights.T)-t).T,Phi )
+         E = (E_D + L2_lambda * weights) / minibatch_size
+         weights = weights - learning_rate * E
+      
+      lst.append(np.linalg.norm(E))            
+    
+    return weights.flatten() , lst  
+
+N , D = input_data.shape 
+
+##Calling the functions to calculate centers and spreads 
+X = input_data[np.newaxis, :, :]
+centers = calculate_centers(K) 
+centers = centers[:, np.newaxis, :]
+spreads = calculate_spreads(K)
+
+#M * D * D
+design_matrix_train = compute_design_matrix(X, centers, spreads)
+design_matrix_validate = compute_design_matrix(input_data_validate[np.newaxis, : , :] , centers , spreads )
+design_matrix_test = compute_design_matrix(input_data_test[np.newaxis, : , :] , centers , spreads )
+
+# Closed-form solution
+print("Closed form" ,closed_form_sol(L2_lambda=0.1,design_matrix=design_matrix_train,output_data=output_data))
+    
+
+# Gradient descent solution
+
+Weight_Train, Y = SGD_sol(learning_rate=0.03,minibatch_size=256,num_epochs=500,L2_lambda=0.4,design_matrix=design_matrix_train,output_data=output_data)    
+%matplotlib inline
+print("Gradient decent solution" , Weight_Train)
+plt.plot(range(len(Y)),Y)
+
+
+## Hyper Parameter tuning 
+###################################################################
+# Choosing the validation set as the input to model the hyperparameters 
+#input_data_validate = np.array(validate_input)
+#output_data_validate = validate_output.reshape([-1,1])
+
+#setting input and output data as validation input
+#input_data = input_data_validate
+#output_data = output_data_validate
+
+# Learning Rate -
+## Choosing too small a value for learning rate may increase the time for convergence and the likelihood of being stuck
+## at the local minima , whereas choosing too large a value may cause the error to become NaN
+Learning_Rate = [0.0001, 0.001, 0.01, 0.05 , 0.1 , 0.5 ]
+
+# K Value -
+## Choosing the K value decides how the clustering happens . Its essential to choose the right K value for an optimal 
+## clustering . The centers and the spread are affected by the 'K' value we choose for clustering , hence can be optimized
+## by a simple grid search for the best value
+K_Vector = [ 2 , 3 , 5 , 7 , 10 , 20] 
+
+# Regularization Term
+## Choosing the 'lambda' value allows us to ensure we do not overfit the data by reducing the variance but with a tradeoff
+## for variance 
+lambda_vector = [ 0.0 , 0.01 , 0.1 , 1 , 2 ] 
+
+# Early Stopping 
+## This is done by analyzing the rate at which the validation error changes . When the validation error stops decreasing , 
+## we stop the training process (using SGD) . This helps minimize the time for training even further .
+
+##Grid search for parameter tuning 
+ValidationError_Vector = []
+for i in range(len(K_Vector)-4) :
+    for j in range(len(lambda_vector)-4) :
+        for k in range(len(Learning_Rate)-5) :
+            #print("Closed form" ,closed_form_sol(L2_lambda=0.1,design_matrix=design_matrix_train,output_data=output_data_train))
+            Weight_Train, Y = SGD_sol(learning_rate=0.03,minibatch_size=256,num_epochs=1,L2_lambda=0.4,design_matrix=design_matrix_train,output_data=output_data_train)
+            error = calculate_errors_validate(Weight_Train.T , design_matrix_validate , output_data_validate) 
+            ValidationError_Vector.append(error)
+
+print(ValidationError_Vector)            
+########################################################
+##Test Error Calculation
+
+
+
+   
